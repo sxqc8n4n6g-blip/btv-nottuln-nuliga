@@ -112,20 +112,19 @@ function parseMeetingReport(html) {
 
 function extractPlayerName(html) {
   if (!html) return null;
-  const m = html.match(/Spielerportrait[^>]*>([\s\S]*?)<\/a>/);
-  if (m) return m[1].replace(/<[^>]+>/g, '').replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, ' ').trim();
-  const plain = strip(html);
-  if (plain && !plain.match(/^\d+$/) && plain.length > 2) return plain;
+  // Spielerportrait steht als title-Attribut: <a ... title="Spielerportrait">Name</a>
+  const m = html.match(/title="Spielerportrait"[^>]*>([^<]+)<\/a>/);
+  if (m) return m[1].replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, ' ').trim();
   return null;
 }
 
 function extractAllPlayerNames(html) {
   if (!html) return [];
   const names = [];
-  const re = /Spielerportrait[^>]*>([\s\S]*?)<\/a>/g;
+  const re = /title="Spielerportrait"[^>]*>([^<]+)<\/a>/g;
   let m;
   while ((m = re.exec(html)) !== null) {
-    const name = m[1].replace(/<[^>]+>/g, '').replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, ' ').trim();
+    const name = m[1].replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, ' ').trim();
     if (name && name.length > 2) names.push(name);
   }
   return names;
