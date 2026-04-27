@@ -1,18 +1,3 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/nuliga.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/nuliga.js",
-      "headers": {
-        "Access-Control-Allow-Origin": "*"
-      }
-    }
-  ]
+  "version": 2
 }
