@@ -99,8 +99,8 @@ function parseMeetingReport(html) {
     }
   }
 
-  // Doppel: ähnliche Struktur wie Einzel
-  // 0=Nr, 1=Spieler1a+1b, 2=Nr, 3=Spieler2a+2b, 4=Satz1, 5=Satz2, 6=Satz3, 7=Matches, 8=Sätze, 9=Games
+  // Doppel: 12 Zellen
+  // 0=Nr1+Nr2, 1=Rang, 2=Spieler1a+1b, 3=Nr1+Nr2, 4=Rang, 5=Spieler2a+2b, 6=Satz1, 7=Satz2, 8=Satz3, 9=Matches, 10=Sätze, 11=Games
   if (doublesStart !== -1) {
     const doublesHtml = html.slice(doublesStart);
     const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -110,14 +110,14 @@ function parseMeetingReport(html) {
       const cr = /<td[^>]*>([\s\S]*?)<\/td>/gi;
       let cm;
       while ((cm = cr.exec(m[1])) !== null) cells.push(cm[1]);
-      if (cells.length < 8) continue;
-      const p1names = extractAllPlayerNames(cells[1]);
-      const p2names = extractAllPlayerNames(cells[3]);
+      if (cells.length < 12) continue;
+      const p1names = extractAllPlayerNames(cells[2]);
+      const p2names = extractAllPlayerNames(cells[5]);
       if (!p1names.length || !p2names.length) continue;
-      const s1 = strip(cells[4]);
-      const s2 = strip(cells[5]);
-      const s3 = strip(cells[6]);
-      const result = strip(cells[7]);
+      const s1 = strip(cells[6]);
+      const s2 = strip(cells[7]);
+      const s3 = strip(cells[8]);
+      const result = strip(cells[9]);
       if (!result.match(/\d:\d/)) continue;
       doubles.push({
         player1: p1names.join(' / '), player2: p2names.join(' / '),
