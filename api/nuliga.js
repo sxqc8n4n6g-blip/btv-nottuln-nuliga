@@ -1,40 +1,191 @@
-// api/nuliga.js — v7
+// api/nuliga.js — v8
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 
-const CORS_HEADERS = {
+const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
+  'Content-Type': 'application/json',
   'Cache-Control': 's-maxage=900, stale-while-revalidate=3600',
 };
 
-module.exports = async function handler(req, res) {
-  if (req.method === 'OPTIONS') { res.writeHead(204, CORS_HEADERS); res.end(); return; }
-  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
+module.exports = async function handler(req, res) {
+  if (req.method === 'OPTIONS') { res.writeHead(204, CORS); res.end(); return; }
+  Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
   try {
     const type = req.query.type || 'matches';
-
     if (type === 'debug') {
-      const r = await fetch(`${BASE}/clubMeetings?club=${CLUB_ID}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
-      });
+      const r = await fetch(BASE + '/clubMeetings?club=' + CLUB_ID, { headers: { 'User-Agent': UA } });
       const html = await r.text();
-      const info = {
+      return res.status(200).json({
         httpStatus: r.status,
         htmlLength: html.length,
         containsBegegnungen: html.includes('Begegnungen im Zeitraum'),
-        containsBegegnungenShort: html.includes('Begegnungen'),
         first500: html.slice(0, 500),
-      };
-      res.setHeader('Content-Type', 'application/json');
-      res.status(200).json(info);
-      return;
+      });
     }
+    if (type === 'teams') return res.status(200).json(await fetchTeams());
+    return res.status(200).json(await fetchMatches());
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
 
-    res.setHeader('Content-Type', 'application/json');
-    res.status(200).json(type === 'teams' ? await fetchTeams() : await fetchMatches());
+async function buildTeamMap() {
+  const r = await fetch(BASE + '/clubTeams?club=' + CLUB_ID, { headers: { 'User-Agent': UA } });
+  const html = await r.text();
+  const map = {};
+  const re = /teamPortrait\?team=(\d+)[^"]*"[^>]*>([^<]+)<\/a>/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    map[m[1]] = m[2].trim();
+  }
+  return map;
+}
+
+async function fetchTeams() {
+  const r = await fetch(BASE + '/clubTeams?club=' + CLUB_ID, { headers: { 'User-Agent': UA } });
+  const html = await r.text();
+  const teams = [];
+  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let currentSeason = '';
+  let m;
+  while ((m = rowRegex.exec(html)) !== null) {
+    const row = m[1];
+    const s = row.match(/(Sommer \d{4}|Winter \d{4}\/\d{4}|Vereinspokal \d{4})/i);
+    if (s) {
+      currentSeason = s[1];
+    } else {
+      const teamMatch = row.match(/teamPortrait\?team=(\d+)[^"]*"[^>]*>([^<]+)<\/a>/);
+      if (teamMatch) {
+        teams.push({
+          season: currentSeason,
+          teamId: teamMatch[1],
+          name: teamMatch[2].trim(),
+          league: (row.match(/groupPage[^"]*"[^>]*>([^<]+)<\/a>/) || [])[1] || '',
+          rank: parseInt((row.match(/<td[^>]*>\s*(\d+)\s*<\/td>/) || [])[1]) || null,
+          points: (row.match(/(\d+:\d+)\s*<\/td>/) || [])[1] || '0:0',
+        });
+      }
+    }
+  }
+  return { teams, fetchedAt: new Date().toISOString() };
+}
+
+async function fetchMatches() {
+  const headers = { 'User-Agent': UA };
+  const [summerHtml, winterHtml, teamMap] = await Promise.all([
+    fetch(BASE + '/clubMeetings?club=' + CLUB_ID, { headers: headers }).then(function(r) { return r.text(); }),
+    fetch(BASE + '/clubMeetings?club=' + CLUB_ID + '&championship=MS+Winter+25%2F26', { headers: headers }).then(function(r) { return r.text(); }),
+    buildTeamMap(),
+  ]);
+
+  const summer = parseMatches(summerHtml, teamMap, 'Sommer 2026');
+  const winter = parseMatches(winterHtml, teamMap, 'Winter 2025/26');
+
+  const all = winter.concat(summer).sort(function(a, b) {
+    function toMs(s) {
+      const p = s.split('.');
+      return new Date(p[2], p[1] - 1, p[0]).getTime();
+    }
+    return toMs(a.date) - toMs(b.date);
+  });
+
+  return {
+    matches: all,
+    upcoming: all.filter(function(m) { return m.status !== 'played'; }),
+    played: all.filter(function(m) { return m.status === 'played'; }),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+function parseMatches(html, teamMap, season) {
+  const matches = [];
+  let start = html.indexOf('Begegnungen im Zeitraum');
+  if (start === -1) start = html.indexOf('Begegnungen');
+  if (start === -1) start = 0;
+
+  const tableHtml = html.slice(start);
+  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let currentDate = '';
+  let currentTime = '';
+  let m;
+
+  while ((m = rowRegex.exec(tableHtml)) !== null) {
+    const row = m[1];
+    const cells = [];
+    const cr = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+    let cm;
+    while ((cm = cr.exec(row)) !== null) {
+      cells.push(cm[1]);
+    }
+    if (cells.length < 5) { /* skip */ } else {
+      const dt = strip(cells[1]);
+      const dm = dt.match(/(\d{2}\.\d{2}\.\d{4})/);
+      const tm = dt.match(/(\d{2}:\d{2})/);
+      if (dm) currentDate = dm[1];
+      if (tm) currentTime = tm[1];
+
+      const liga = strip(cells[3]);
+      const homeId = extractTeamId(cells[4]);
+      const awayId = extractTeamId(cells[5] || '');
+      const home = (homeId && teamMap[homeId]) || extractTeamName(cells[4]);
+      const away = (awayId && teamMap[awayId]) || extractTeamName(cells[5] || '');
+
+      const valid = home && away
+        && home !== 'Heimmannschaft'
+        && liga !== 'Liga'
+        && liga !== ''
+        && (home.includes('Nottuln') || away.includes('Nottuln'));
+
+      if (valid) {
+        const scoreM = strip(cells[6] || '').match(/(\d+):(\d+)/);
+        const statusText = strip(cells[cells.length - 1]).toLowerCase();
+        const status = scoreM ? 'played'
+          : statusText.indexOf('urspr') !== -1 ? 'rescheduled'
+          : 'upcoming';
+
+        matches.push({
+          date: currentDate,
+          time: currentTime,
+          season: season,
+          league: liga,
+          home: home,
+          away: away,
+          homeScore: scoreM ? scoreM[1] : null,
+          awayScore: scoreM ? scoreM[2] : null,
+          status: status,
+          isHome: home.includes('Nottuln'),
+        });
+      }
+    }
+  }
+  return matches;
+}
+
+function extractTeamId(html) {
+  const m = html.match(/teamPortrait\?[^"]*team=(\d+)/);
+  return m ? m[1] : null;
+}
+
+function extractTeamName(html) {
+  const lm = html.match(/teamPortrait[^"]*"[^>]*>([^<]+)<\/a>/);
+  if (lm) return lm[1].trim();
+  return strip(html) || null;
+}
+
+function strip(html) {
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\[Routenplan\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}    res.status(200).json(type === 'teams' ? await fetchTeams() : await fetchMatches());
   } catch (err) {
     res.setHeader('Content-Type', 'application/json');
     res.status(500).json({ error: err.message });
