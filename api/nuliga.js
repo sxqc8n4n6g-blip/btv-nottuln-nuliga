@@ -1,4 +1,4 @@
-// api/nuliga.js — v10
+// api/nuliga.js — v11
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
@@ -37,30 +37,7 @@ async function get(url) {
   return r.text();
 }
 
-// Extrahiert alle <td>...</td> Inhalte aus einem Row-String
-// Funktioniert auch bei <td nowrap="nowrap"> etc.
-function extractCells(row) {
-  const cells = [];
-  // Regex die Attribute im td-Tag erlaubt
-  const re = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-  let m;
-  while ((m = re.exec(row)) !== null) {
-    cells.push(m[1]);
-  }
-  return cells;
-}
-
-// Extrahiert alle <tr>...</tr> Blöcke aus HTML
-function extractRows(html) {
-  const rows = [];
-  const re = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    rows.push(m[1]);
-  }
-  return rows;
-}
-
+// Gibt Map zurück: teamId -> lesbarer Name (nur BTV Nottuln Teams)
 async function buildTeamMap() {
   const html = await get(BASE + '/clubTeams?club=' + CLUB_ID);
   const map = {};
@@ -75,10 +52,11 @@ async function buildTeamMap() {
 async function fetchTeams() {
   const html = await get(BASE + '/clubTeams?club=' + CLUB_ID);
   const teams = [];
-  const rows = extractRows(html);
+  const re = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let m;
   let currentSeason = '';
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+  while ((m = re.exec(html)) !== null) {
+    const row = m[1];
     const s = row.match(/(Sommer \d{4}|Winter \d{4}\/\d{4}|Vereinspokal \d{4})/i);
     if (s) {
       currentSeason = s[1];
@@ -127,48 +105,59 @@ async function fetchMatches() {
 
 function parseMatches(html, teamMap, season) {
   const matches = [];
-
   const start = html.indexOf('Begegnungen im Zeitraum');
   if (start === -1) return matches;
 
-  // Nur den Tabellenbereich nehmen
   const tableHtml = html.slice(start);
-  const rows = extractRows(tableHtml);
-
+  const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let m;
   let currentDate = '';
   let currentTime = '';
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const cells = extractCells(row);
+  while ((m = rowRe.exec(tableHtml)) !== null) {
+    const row = m[1];
 
+    // Zellen extrahieren
+    const cells = [];
+    const cellRe = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+    let cm;
+    while ((cm = cellRe.exec(row)) !== null) {
+      cells.push(cm[1]);
+    }
     if (cells.length < 6) continue;
 
-    // Zelle 1: Datum + Uhrzeit (z.B. "03.05.2026 10:00")
+    // Datum & Zeit aus Zelle 1
     const dt = strip(cells[1]);
     const dm = dt.match(/(\d{2}\.\d{2}\.\d{4})/);
     const tm = dt.match(/(\d{2}:\d{2})/);
     if (dm) currentDate = dm[1];
     if (tm) currentTime = tm[1];
+    if (!currentDate) continue;
 
-    // Zelle 3: Liga (z.B. "W34BK")
+    // Liga aus Zelle 3
     const liga = strip(cells[3]);
+    if (!liga || liga === 'Liga') continue;
 
-    // Zellen 4+5: Heim- und Gastteam
+    // Team-IDs aus Zellen 4 und 5
     const homeId = extractTeamId(cells[4]);
     const awayId = extractTeamId(cells[5]);
-    const home = (homeId && teamMap[homeId]) || extractTeamName(cells[4]);
-    const away = (awayId && teamMap[awayId]) || extractTeamName(cells[5]);
+
+    // Prüfen ob eines der Teams zu BTV Nottuln gehört (ID in teamMap)
+    const homeIsBTV = homeId && teamMap[homeId] !== undefined;
+    const awayIsBTV = awayId && teamMap[awayId] !== undefined;
+    if (!homeIsBTV && !awayIsBTV) continue;
+
+    // Namen: BTV-Teams aus Map, Gegner aus Link-Text
+    const home = homeIsBTV ? teamMap[homeId] : (extractTeamName(cells[4]) || strip(cells[4]));
+    const away = awayIsBTV ? teamMap[awayId] : (extractTeamName(cells[5]) || strip(cells[5]));
 
     if (!home || !away) continue;
     if (home === 'Heimmannschaft') continue;
-    if (liga === 'Liga' || liga === '') continue;
-    if (!home.includes('Nottuln') && !away.includes('Nottuln')) continue;
 
-    // Zelle 6: Match-Ergebnis
+    // Ergebnis aus Zelle 6
     const scoreM = strip(cells[6] || '').match(/(\d+):(\d+)/);
 
-    // Letzte Zelle: Status
+    // Status aus letzter Zelle
     const statusText = strip(cells[cells.length - 1]).toLowerCase();
     const status = scoreM ? 'played'
       : statusText.indexOf('urspr') !== -1 ? 'rescheduled'
@@ -184,7 +173,7 @@ function parseMatches(html, teamMap, season) {
       homeScore: scoreM ? scoreM[1] : null,
       awayScore: scoreM ? scoreM[2] : null,
       status: status,
-      isHome: home.includes('Nottuln'),
+      isHome: homeIsBTV,
     });
   }
   return matches;
@@ -192,15 +181,15 @@ function parseMatches(html, teamMap, season) {
 
 function extractTeamId(html) {
   if (!html) return null;
-  const m = html.match(/teamPortrait\?[^"]*team=(\d+)/);
+  const m = html.match(/[?&;]team=(\d+)/);
   return m ? m[1] : null;
 }
 
 function extractTeamName(html) {
   if (!html) return null;
-  const m = html.match(/teamPortrait[^"]*"[^>]*>([^<]+)<\/a>/);
-  if (m) return m[1].trim();
-  return strip(html) || null;
+  const m = html.match(/teamPortrait[^"]*"[^>]*>([\s\S]*?)<\/a>/);
+  if (m) return m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  return null;
 }
 
 function strip(html) {
