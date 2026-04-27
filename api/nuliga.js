@@ -131,20 +131,37 @@ function parseMeetingReport(html) {
 
 function extractPlayerName(html) {
   if (!html) return null;
-  // Spielerportrait steht als title-Attribut: <a ... title="Spielerportrait">Name</a>
+  // Spielerportrait als title-Attribut
   const m = html.match(/title="Spielerportrait"[^>]*>([^<]+)<\/a>/);
   if (m) return m[1].replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, ' ').trim();
+  // Fallback: plain text (Spieler steht direkt ohne Link in der Zelle)
+  const plain = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  // Spielernamen erkennen: "Nachname, Vorname (Nr, LKxx,x)" → nur Name ohne Klammer
+  const nameMatch = plain.match(/^([A-ZÄÖÜa-zäöüß\s,\-]+?)\s*\(\d/);
+  if (nameMatch) return nameMatch[1].trim();
+  // Letzter Fallback: gesamter Text wenn er wie ein Name aussieht
+  if (plain && plain.length > 3 && plain.length < 60 && !plain.match(/^\d+$/) && plain.includes(',')) return plain.split('(')[0].trim();
   return null;
 }
 
 function extractAllPlayerNames(html) {
   if (!html) return [];
   const names = [];
+  // Erst mit title="Spielerportrait" suchen
   const re = /title="Spielerportrait"[^>]*>([^<]+)<\/a>/g;
   let m;
   while ((m = re.exec(html)) !== null) {
     const name = m[1].replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, ' ').trim();
     if (name && name.length > 2) names.push(name);
+  }
+  if (names.length) return names;
+  // Fallback: plain text, mehrere Spieler durch Zeilenumbruch getrennt
+  const plain = html.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ');
+  const lines = plain.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const nameMatch = line.match(/^([A-ZÄÖÜa-zäöüß\s,\-]+?)\s*\(\d/);
+    if (nameMatch && nameMatch[1].trim().length > 2) names.push(nameMatch[1].trim());
   }
   return names;
 }
