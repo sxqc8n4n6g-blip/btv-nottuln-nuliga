@@ -1,4 +1,4 @@
-// api/nuliga.js — v11
+// api/nuliga.js — v12
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
@@ -16,15 +16,6 @@ module.exports = async function handler(req, res) {
   Object.entries(CORS).forEach(function(e) { res.setHeader(e[0], e[1]); });
   try {
     const type = req.query.type || 'matches';
-    if (type === 'debug') {
-      const html = await get(BASE + '/clubMeetings?club=' + CLUB_ID);
-      const idx = html.indexOf('Begegnungen im Zeitraum');
-      return res.status(200).json({
-        htmlLength: html.length,
-        containsBegegnungen: idx !== -1,
-        tableStart: idx !== -1 ? html.slice(idx, idx + 1500) : 'NOT FOUND',
-      });
-    }
     if (type === 'teams') return res.status(200).json(await fetchTeams());
     return res.status(200).json(await fetchMatches());
   } catch (err) {
@@ -37,7 +28,6 @@ async function get(url) {
   return r.text();
 }
 
-// Gibt Map zurück: teamId -> lesbarer Name (nur BTV Nottuln Teams)
 async function buildTeamMap() {
   const html = await get(BASE + '/clubTeams?club=' + CLUB_ID);
   const map = {};
@@ -79,15 +69,38 @@ async function fetchTeams() {
 
 async function fetchMatches() {
   const teamMap = await buildTeamMap();
-  const [summerHtml, winterHtml] = await Promise.all([
+
+  // Alle relevanten URLs laden:
+  // 1. Sommer 2026 (aktuelle Saison, enthält upcoming + played)
+  // 2. Winter 25/26 komplett (alle Ergebnisse)
+  // 3. Vereinspokal 2026
+  const [summerHtml, winterHtml, pokalHtml] = await Promise.all([
     get(BASE + '/clubMeetings?club=' + CLUB_ID),
-    get(BASE + '/clubMeetings?club=' + CLUB_ID + '&championship=MS+Winter+25%2F26'),
+    get(BASE + '/clubMeetings?club=' + CLUB_ID + '&timeRange=season&championship=MS+Winter+25%2F26'),
+    get(BASE + '/clubMeetings?club=' + CLUB_ID + '&timeRange=season&championship=WTV+VP+2026'),
   ]);
 
   const summer = parseMatches(summerHtml, teamMap, 'Sommer 2026');
   const winter = parseMatches(winterHtml, teamMap, 'Winter 2025/26');
+  const pokal  = parseMatches(pokalHtml,  teamMap, 'Vereinspokal 2026');
 
-  const all = winter.concat(summer).sort(function(a, b) {
+  // Zusammenführen
+  const combined = winter.concat(summer).concat(pokal);
+
+  // Deduplizieren: gleicher Key = selbes Spiel
+  const seen = {};
+  const all = [];
+  for (let i = 0; i < combined.length; i++) {
+    const match = combined[i];
+    const key = match.date + '|' + match.time + '|' + match.home + '|' + match.away;
+    if (!seen[key]) {
+      seen[key] = true;
+      all.push(match);
+    }
+  }
+
+  // Nach Datum sortieren
+  all.sort(function(a, b) {
     function ms(s) {
       const p = s.split('.');
       return new Date(parseInt(p[2]), parseInt(p[1]) - 1, parseInt(p[0])).getTime();
@@ -116,8 +129,6 @@ function parseMatches(html, teamMap, season) {
 
   while ((m = rowRe.exec(tableHtml)) !== null) {
     const row = m[1];
-
-    // Zellen extrahieren
     const cells = [];
     const cellRe = /<td[^>]*>([\s\S]*?)<\/td>/gi;
     let cm;
@@ -126,7 +137,6 @@ function parseMatches(html, teamMap, season) {
     }
     if (cells.length < 6) continue;
 
-    // Datum & Zeit aus Zelle 1
     const dt = strip(cells[1]);
     const dm = dt.match(/(\d{2}\.\d{2}\.\d{4})/);
     const tm = dt.match(/(\d{2}:\d{2})/);
@@ -134,30 +144,20 @@ function parseMatches(html, teamMap, season) {
     if (tm) currentTime = tm[1];
     if (!currentDate) continue;
 
-    // Liga aus Zelle 3
     const liga = strip(cells[3]);
     if (!liga || liga === 'Liga') continue;
 
-    // Team-IDs aus Zellen 4 und 5
     const homeId = extractTeamId(cells[4]);
     const awayId = extractTeamId(cells[5]);
-
-    // Prüfen ob eines der Teams zu BTV Nottuln gehört (ID in teamMap)
     const homeIsBTV = homeId && teamMap[homeId] !== undefined;
     const awayIsBTV = awayId && teamMap[awayId] !== undefined;
     if (!homeIsBTV && !awayIsBTV) continue;
 
-    // Namen: BTV-Teams aus Map, Gegner aus Link-Text
     const home = homeIsBTV ? teamMap[homeId] : (extractTeamName(cells[4]) || strip(cells[4]));
     const away = awayIsBTV ? teamMap[awayId] : (extractTeamName(cells[5]) || strip(cells[5]));
+    if (!home || !away || home === 'Heimmannschaft') continue;
 
-    if (!home || !away) continue;
-    if (home === 'Heimmannschaft') continue;
-
-    // Ergebnis aus Zelle 6
     const scoreM = strip(cells[6] || '').match(/(\d+):(\d+)/);
-
-    // Status aus letzter Zelle
     const statusText = strip(cells[cells.length - 1]).toLowerCase();
     const status = scoreM ? 'played'
       : statusText.indexOf('urspr') !== -1 ? 'rescheduled'
