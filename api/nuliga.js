@@ -1,4 +1,4 @@
-// api/nuliga.js — v9
+// api/nuliga.js — v10
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
@@ -16,20 +16,15 @@ module.exports = async function handler(req, res) {
   Object.entries(CORS).forEach(function(e) { res.setHeader(e[0], e[1]); });
   try {
     const type = req.query.type || 'matches';
-
     if (type === 'debug') {
-      const r = await fetch(BASE + '/clubMeetings?club=' + CLUB_ID, { headers: { 'User-Agent': UA } });
-      const html = await r.text();
+      const html = await get(BASE + '/clubMeetings?club=' + CLUB_ID);
       const idx = html.indexOf('Begegnungen im Zeitraum');
       return res.status(200).json({
-        httpStatus: r.status,
         htmlLength: html.length,
         containsBegegnungen: idx !== -1,
-        // Zeige 1000 Zeichen ab der Begegnungstabelle
-        tableStart: idx !== -1 ? html.slice(idx, idx + 1000) : 'NOT FOUND',
+        tableStart: idx !== -1 ? html.slice(idx, idx + 1500) : 'NOT FOUND',
       });
     }
-
     if (type === 'teams') return res.status(200).json(await fetchTeams());
     return res.status(200).json(await fetchMatches());
   } catch (err) {
@@ -40,6 +35,30 @@ module.exports = async function handler(req, res) {
 async function get(url) {
   const r = await fetch(url, { headers: { 'User-Agent': UA } });
   return r.text();
+}
+
+// Extrahiert alle <td>...</td> Inhalte aus einem Row-String
+// Funktioniert auch bei <td nowrap="nowrap"> etc.
+function extractCells(row) {
+  const cells = [];
+  // Regex die Attribute im td-Tag erlaubt
+  const re = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+  let m;
+  while ((m = re.exec(row)) !== null) {
+    cells.push(m[1]);
+  }
+  return cells;
+}
+
+// Extrahiert alle <tr>...</tr> Blöcke aus HTML
+function extractRows(html) {
+  const rows = [];
+  const re = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    rows.push(m[1]);
+  }
+  return rows;
 }
 
 async function buildTeamMap() {
@@ -56,8 +75,7 @@ async function buildTeamMap() {
 async function fetchTeams() {
   const html = await get(BASE + '/clubTeams?club=' + CLUB_ID);
   const teams = [];
-  // Zeilen einzeln aufteilen statt Regex über den ganzen HTML
-  const rows = html.split('<tr');
+  const rows = extractRows(html);
   let currentSeason = '';
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -110,66 +128,48 @@ async function fetchMatches() {
 function parseMatches(html, teamMap, season) {
   const matches = [];
 
-  // Tabelle ab "Begegnungen im Zeitraum" ausschneiden
   const start = html.indexOf('Begegnungen im Zeitraum');
   if (start === -1) return matches;
-  const tableHtml = html.slice(start);
 
-  // Zeilen per split statt Regex (robuster bei XHTML)
-  const rows = tableHtml.split('<tr');
+  // Nur den Tabellenbereich nehmen
+  const tableHtml = html.slice(start);
+  const rows = extractRows(tableHtml);
 
   let currentDate = '';
   let currentTime = '';
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
+    const cells = extractCells(row);
 
-    // Zellen per split extrahieren
-    const cellParts = row.split('<td');
-    if (cellParts.length < 6) continue;
+    if (cells.length < 6) continue;
 
-    // Inhalt jeder Zelle extrahieren (bis </td>)
-    const cells = [];
-    for (let j = 1; j < cellParts.length; j++) {
-      const end = cellParts[j].indexOf('</td>');
-      if (end !== -1) {
-        // Inhalt nach dem ersten >
-        const gtIdx = cellParts[j].indexOf('>');
-        cells.push(gtIdx !== -1 ? cellParts[j].slice(gtIdx + 1, end) : '');
-      } else {
-        cells.push('');
-      }
-    }
-
-    if (cells.length < 5) continue;
-
-    // Datum & Uhrzeit aus Zelle 1
+    // Zelle 1: Datum + Uhrzeit (z.B. "03.05.2026 10:00")
     const dt = strip(cells[1]);
     const dm = dt.match(/(\d{2}\.\d{2}\.\d{4})/);
     const tm = dt.match(/(\d{2}:\d{2})/);
     if (dm) currentDate = dm[1];
     if (tm) currentTime = tm[1];
 
-    // Liga aus Zelle 3
+    // Zelle 3: Liga (z.B. "W34BK")
     const liga = strip(cells[3]);
 
-    // Teams aus Zellen 4 und 5
+    // Zellen 4+5: Heim- und Gastteam
     const homeId = extractTeamId(cells[4]);
-    const awayId = cells[5] ? extractTeamId(cells[5]) : null;
+    const awayId = extractTeamId(cells[5]);
     const home = (homeId && teamMap[homeId]) || extractTeamName(cells[4]);
-    const away = (awayId && teamMap[awayId]) || (cells[5] ? extractTeamName(cells[5]) : '');
+    const away = (awayId && teamMap[awayId]) || extractTeamName(cells[5]);
 
     if (!home || !away) continue;
     if (home === 'Heimmannschaft') continue;
     if (liga === 'Liga' || liga === '') continue;
     if (!home.includes('Nottuln') && !away.includes('Nottuln')) continue;
 
-    // Ergebnis aus Zelle 6
-    const scoreM = cells[6] ? strip(cells[6]).match(/(\d+):(\d+)/) : null;
+    // Zelle 6: Match-Ergebnis
+    const scoreM = strip(cells[6] || '').match(/(\d+):(\d+)/);
 
-    // Status aus letzter Zelle
-    const lastCell = cells[cells.length - 1] || '';
-    const statusText = strip(lastCell).toLowerCase();
+    // Letzte Zelle: Status
+    const statusText = strip(cells[cells.length - 1]).toLowerCase();
     const status = scoreM ? 'played'
       : statusText.indexOf('urspr') !== -1 ? 'rescheduled'
       : 'upcoming';
@@ -191,17 +191,20 @@ function parseMatches(html, teamMap, season) {
 }
 
 function extractTeamId(html) {
+  if (!html) return null;
   const m = html.match(/teamPortrait\?[^"]*team=(\d+)/);
   return m ? m[1] : null;
 }
 
 function extractTeamName(html) {
+  if (!html) return null;
   const m = html.match(/teamPortrait[^"]*"[^>]*>([^<]+)<\/a>/);
   if (m) return m[1].trim();
   return strip(html) || null;
 }
 
 function strip(html) {
+  if (!html) return '';
   return html
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
