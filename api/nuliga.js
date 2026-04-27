@@ -54,6 +54,8 @@ function parseMeetingReport(html) {
   const singlesStart = html.indexOf('Einzelspiele');
   const doublesStart = html.indexOf('Doppelspiele');
 
+  // Einzel: 12 Zellen pro Zeile
+  // 0=Nr, 1=Spieler1, 2=leer, 3=Nr, 4=Spieler2, 5=leer, 6=Satz1, 7=Satz2, 8=Satz3, 9=Matches, 10=Sätze, 11=Games
   if (singlesStart !== -1 && doublesStart !== -1) {
     const singlesHtml = html.slice(singlesStart, doublesStart);
     const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -63,38 +65,44 @@ function parseMeetingReport(html) {
       const cr = /<td[^>]*>([\s\S]*?)<\/td>/gi;
       let cm;
       while ((cm = cr.exec(m[1])) !== null) cells.push(cm[1]);
-      if (cells.length < 10) continue;
+      if (cells.length < 12) continue;
       const p1 = extractPlayerName(cells[1]);
       const p2 = extractPlayerName(cells[4]);
       if (!p1 || !p2 || p1.length < 3 || p2.length < 3) continue;
-      singles.push({
-        player1: p1, player2: p2,
-        set1: strip(cells[6]), set2: strip(cells[7]), set3: strip(cells[8]),
-        result: strip(cells[9]),
-      });
+      // Satzstände z.B. "4:6", "1:6"
+      const s1 = strip(cells[6]);
+      const s2 = strip(cells[7]);
+      const s3 = strip(cells[8]);
+      // Match-Ergebnis z.B. "0:1"
+      const result = strip(cells[9]);
+      if (!result.match(/\d:\d/)) continue;
+      singles.push({ player1: p1, player2: p2, set1: s1, set2: s2, set3: s3, result: result });
     }
   }
 
+  // Doppel: 15 Zellen pro Zeile
+  // 0=Nr1, 1=Nr2, 2=Rang, 3=Spieler1a+1b, 4=leer, 5=Nr1, 6=Nr2, 7=Spieler2a+2b, 8=leer, 9=Satz1, 10=Satz2, 11=Satz3, 12=Matches, 13=Sätze, 14=Games
   if (doublesStart !== -1) {
     const doublesHtml = html.slice(doublesStart);
-    // Stoppe bei "Gesamt"-Zeile
-    const gesamtIdx = doublesHtml.indexOf('Gesamt');
-    const doublesSection = gesamtIdx !== -1 ? doublesHtml.slice(0, gesamtIdx) : doublesHtml;
     const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let m;
-    while ((m = rowRe.exec(doublesSection)) !== null) {
+    while ((m = rowRe.exec(doublesHtml)) !== null) {
       const cells = [];
       const cr = /<td[^>]*>([\s\S]*?)<\/td>/gi;
       let cm;
       while ((cm = cr.exec(m[1])) !== null) cells.push(cm[1]);
-      if (cells.length < 10) continue;
-      const p1names = extractAllPlayerNames(cells[1]);
-      const p2names = extractAllPlayerNames(cells[4]);
+      if (cells.length < 15) continue;
+      const p1names = extractAllPlayerNames(cells[3]);
+      const p2names = extractAllPlayerNames(cells[7]);
       if (!p1names.length || !p2names.length) continue;
+      const s1 = strip(cells[9]);
+      const s2 = strip(cells[10]);
+      const s3 = strip(cells[11]);
+      const result = strip(cells[12]);
+      if (!result.match(/\d:\d/)) continue;
       doubles.push({
         player1: p1names.join(' / '), player2: p2names.join(' / '),
-        set1: strip(cells[6]), set2: strip(cells[7]), set3: strip(cells[8]),
-        result: strip(cells[9]),
+        set1: s1, set2: s2, set3: s3, result: result,
       });
     }
   }
