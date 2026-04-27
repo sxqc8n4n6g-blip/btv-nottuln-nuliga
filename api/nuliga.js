@@ -1,4 +1,4 @@
-// api/nuliga.js — v4 final
+// api/nuliga.js — v5 final
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 
@@ -51,19 +51,54 @@ function parseTeams(html) {
   return { teams, fetchedAt: new Date().toISOString() };
 }
 
+// ─── TEAM-ID → NAME MAPPING ──────────────────────────────────────────────────
+// Aus clubTeams-Seite: team-ID → lesbarer Mannschaftsname
+
+async function buildTeamMap() {
+  const r = await fetch(`${BASE}/clubTeams?club=${CLUB_ID}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const html = await r.text();
+  const map = {};
+  const re = /teamPortrait\?team=(\d+)[^"]*"[^>]*>([^<]+)<\/a>/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    map[m[1]] = m[2].trim();
+  }
+  return map;
+}
+
 // ─── MATCHES ─────────────────────────────────────────────────────────────────
 
 async function fetchMatches() {
-  const r = await fetch(`${BASE}/clubMeetings?club=${CLUB_ID}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-  return parseMatches(await r.text());
+  // Beide Saisons parallel laden + Team-Map
+  const [summerHtml, winterHtml, teamMap] = await Promise.all([
+    fetch(`${BASE}/clubMeetings?club=${CLUB_ID}`, { headers: { 'User-Agent': 'Mozilla/5.0' } }).then(r => r.text()),
+    fetch(`${BASE}/clubMeetings?club=${CLUB_ID}&championship=MS+Winter+25%2F26`, { headers: { 'User-Agent': 'Mozilla/5.0' } }).then(r => r.text()),
+    buildTeamMap(),
+  ]);
+
+  const summerMatches = parseMatches(summerHtml, teamMap, 'Sommer 2026');
+  const winterMatches = parseMatches(winterHtml, teamMap, 'Winter 2025/26');
+
+  // Zusammenführen, nach Datum sortieren
+  const all = [...winterMatches, ...summerMatches].sort((a, b) => {
+    const toDate = s => { const [d,mo,y] = s.split('.'); return new Date(y, mo-1, d); };
+    return toDate(a.date) - toDate(b.date);
+  });
+
+  return {
+    matches: all,
+    upcoming: all.filter(m => m.status !== 'played'),
+    played:   all.filter(m => m.status === 'played'),
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
-function parseMatches(html) {
+function parseMatches(html, teamMap, season) {
   const matches = [];
   const start = html.indexOf('Begegnungen im Zeitraum');
-  if (start === -1) return { matches: [], upcoming: [], played: [], fetchedAt: new Date().toISOString() };
-
+  if (start === -1) return matches;
   const tableHtml = html.slice(start);
+
   const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let currentDate = '';
   let currentTime = '';
@@ -71,39 +106,35 @@ function parseMatches(html) {
 
   while ((m = rowRegex.exec(tableHtml)) !== null) {
     const row = m[1];
-
-    // Alle <td> als rohes HTML sammeln
     const cells = [];
     const cr = /<td[^>]*>([\s\S]*?)<\/td>/gi;
     let cm;
     while ((cm = cr.exec(row)) !== null) cells.push(cm[1]);
     if (cells.length < 5) continue;
 
-    // Spalte 0: Wochentag (So., Mo., ...)  — nur wenn vorhanden neues Datum setzen
-    // Spalte 1: Datum + Uhrzeit
+    // Datum & Uhrzeit
     const dt = strip(cells[1]);
     const dm = dt.match(/(\d{2}\.\d{2}\.\d{4})/);
     const tm = dt.match(/(\d{2}:\d{2})/);
     if (dm) currentDate = dm[1];
     if (tm) currentTime = tm[1];
 
-    // Spalte 2: leer / Heimspiel-Icon — überspringen
-    // Spalte 3: Liga — direkt als Text, KEIN Link, z.B. "W34BK"
+    // Liga (Spalte 3)
     const liga = strip(cells[3]);
 
-    // Spalte 4: Heimmannschaft (Link)
-    // Spalte 5: Gastmannschaft (Link)
-    const home = extractTeam(cells[4]);
-    const away = extractTeam(cells[5] || '');
+    // Team-IDs aus Links extrahieren
+    const homeId = extractTeamId(cells[4]);
+    const awayId = extractTeamId(cells[5] || '');
+
+    // Teamnamen: erst aus Map (lesbarer Name), sonst aus Link-Text
+    const home = (homeId && teamMap[homeId]) || extractTeamName(cells[4]);
+    const away = (awayId && teamMap[awayId]) || extractTeamName(cells[5] || '');
 
     if (!home || !away) continue;
     if (home === 'Heimmannschaft' || liga === 'Liga' || liga === '') continue;
     if (!home.includes('Nottuln') && !away.includes('Nottuln')) continue;
 
-    // Spalte 6: Matches-Ergebnis
     const scoreM = strip(cells[6] || '').match(/(\d+):(\d+)/);
-
-    // Letzte Spalte: Spielbericht / Status
     const statusText = strip(cells[cells.length - 1]).toLowerCase();
     const status = scoreM ? 'played'
       : statusText.includes('urspr') ? 'rescheduled'
@@ -112,6 +143,7 @@ function parseMatches(html) {
     matches.push({
       date: currentDate,
       time: currentTime,
+      season,
       league: liga,
       home,
       away,
@@ -121,20 +153,18 @@ function parseMatches(html) {
       isHome: home.includes('Nottuln'),
     });
   }
-
-  return {
-    matches,
-    upcoming: matches.filter(m => m.status !== 'played'),
-    played:   matches.filter(m => m.status === 'played'),
-    fetchedAt: new Date().toISOString(),
-  };
+  return matches;
 }
 
-function extractTeam(html) {
+function extractTeamId(html) {
+  const m = html.match(/teamPortrait\?[^"]*team=(\d+)/);
+  return m ? m[1] : null;
+}
+
+function extractTeamName(html) {
   const lm = html.match(/teamPortrait[^"]*"[^>]*>([^<]+)<\/a>/);
   if (lm) return lm[1].trim();
-  const plain = strip(html);
-  return plain || null;
+  return strip(html) || null;
 }
 
 function strip(html) {
@@ -142,6 +172,7 @@ function strip(html) {
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/\u00a0/g, ' ')
+    .replace(/\[Routenplan\]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
