@@ -89,13 +89,13 @@ function parseMeetingReport(html) {
       if (cells.length < 10) continue;
       const p1 = extractPlayerName(cells[1]);
       const p2 = extractPlayerName(cells[3]);
-      if (!p1 || !p2 || p1.length < 3 || p2.length < 3) continue;
+      if (!p1 || !p2 || p1.name.length < 3 || p2.name.length < 3) continue;
       const s1 = strip(cells[4]);
       const s2 = strip(cells[5]);
       const s3 = strip(cells[6]);
       const result = strip(cells[7]);
       if (!result.match(/\d:\d/)) continue;
-      singles.push({ player1: p1, player2: p2, set1: s1, set2: s2, set3: s3, result: result });
+      singles.push({ player1: p1.name, player1lk: p1.lk, player2: p2.name, player2lk: p2.lk, set1: s1, set2: s2, set3: s3, result: result });
     }
   }
 
@@ -131,17 +131,21 @@ function parseMeetingReport(html) {
 
 function extractPlayerName(html) {
   if (!html) return null;
-  // Spielerportrait als title-Attribut
+  // Spielerportrait als title-Attribut: <a title="Spielerportrait">Name (Nr, LKxx,x)</a>
   const m = html.match(/title="Spielerportrait"[^>]*>([^<]+)<\/a>/);
-  if (m) return m[1].replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, ' ').trim();
-  // Fallback: plain text (Spieler steht direkt ohne Link in der Zelle)
+  if (m) {
+    const raw = m[1].trim();
+    const lkMatch = raw.match(/LK(\d+[\.,]\d+)/);
+    const name = raw.replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, ' ').trim();
+    return { name: name, lk: lkMatch ? lkMatch[1].replace(',', '.') : null };
+  }
+  // Fallback: plain text
   const plain = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  // Spielernamen erkennen: "Nachname, Vorname (Nr, LKxx,x)" → nur Name ohne Klammer
+  const lkMatch = plain.match(/LK(\d+[\.,]\d+)/);
   const nameMatch = plain.match(/^([A-ZÄÖÜa-zäöüß\s,\-]+?)\s*\(\d/);
-  if (nameMatch) return nameMatch[1].trim();
-  // Letzter Fallback: gesamter Text wenn er wie ein Name aussieht
-  if (plain && plain.length > 3 && plain.length < 60 && !plain.match(/^\d+$/) && plain.includes(',')) return plain.split('(')[0].trim();
-  return null;
+  const name = nameMatch ? nameMatch[1].trim() : plain.split('(')[0].trim();
+  if (!name || name.length < 3) return null;
+  return { name: name, lk: lkMatch ? lkMatch[1].replace(',', '.') : null };
 }
 
 function extractAllPlayerNames(html) {
