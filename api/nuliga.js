@@ -1,4 +1,4 @@
-// api/nuliga.js — v3
+// api/nuliga.js — v4 final
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 
@@ -11,19 +11,11 @@ const CORS_HEADERS = {
 };
 
 module.exports = async function handler(req, res) {
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, CORS_HEADERS);
-    res.end();
-    return;
-  }
+  if (req.method === 'OPTIONS') { res.writeHead(204, CORS_HEADERS); res.end(); return; }
   Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
   try {
     const type = req.query.type || 'matches';
-    if (type === 'teams') {
-      res.status(200).json(await fetchTeams());
-    } else {
-      res.status(200).json(await fetchMatches());
-    }
+    res.status(200).json(type === 'teams' ? await fetchTeams() : await fetchMatches());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -32,38 +24,28 @@ module.exports = async function handler(req, res) {
 // ─── TEAMS ───────────────────────────────────────────────────────────────────
 
 async function fetchTeams() {
-  const res = await fetch(`${BASE}/clubTeams?club=${CLUB_ID}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  });
-  const html = await res.text();
-  return parseTeams(html);
+  const r = await fetch(`${BASE}/clubTeams?club=${CLUB_ID}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  return parseTeams(await r.text());
 }
 
 function parseTeams(html) {
   const teams = [];
   const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let currentSeason = '';
-  let match;
-
-  while ((match = rowRegex.exec(html)) !== null) {
-    const row = match[1];
-    const seasonMatch = row.match(/(Sommer \d{4}|Winter \d{4}\/\d{4}|Vereinspokal \d{4})/i);
-    if (seasonMatch) { currentSeason = seasonMatch[1]; continue; }
-
+  let m;
+  while ((m = rowRegex.exec(html)) !== null) {
+    const row = m[1];
+    const s = row.match(/(Sommer \d{4}|Winter \d{4}\/\d{4}|Vereinspokal \d{4})/i);
+    if (s) { currentSeason = s[1]; continue; }
     const teamMatch = row.match(/teamPortrait\?team=(\d+)[^"]*"[^>]*>([^<]+)<\/a>/);
     if (!teamMatch) continue;
-
-    const pointsMatch = row.match(/(\d+:\d+)\s*<\/td>/);
-    const leagueMatch = row.match(/groupPage[^"]*"[^>]*>([^<]+)<\/a>/);
-    const rankMatch = row.match(/<td[^>]*>\s*(\d+)\s*<\/td>/);
-
     teams.push({
       season: currentSeason,
       teamId: teamMatch[1],
       name: teamMatch[2].trim(),
-      league: leagueMatch ? leagueMatch[1].trim() : '',
-      rank: rankMatch ? parseInt(rankMatch[1]) : null,
-      points: pointsMatch ? pointsMatch[1] : '0:0',
+      league: (row.match(/groupPage[^"]*"[^>]*>([^<]+)<\/a>/) || [])[1]?.trim() || '',
+      rank: parseInt((row.match(/<td[^>]*>\s*(\d+)\s*<\/td>/) || [])[1]) || null,
+      points: (row.match(/(\d+:\d+)\s*<\/td>/) || [])[1] || '0:0',
     });
   }
   return { teams, fetchedAt: new Date().toISOString() };
@@ -72,89 +54,71 @@ function parseTeams(html) {
 // ─── MATCHES ─────────────────────────────────────────────────────────────────
 
 async function fetchMatches() {
-  const res = await fetch(`${BASE}/clubMeetings?club=${CLUB_ID}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  });
-  const html = await res.text();
-  return parseMatches(html);
+  const r = await fetch(`${BASE}/clubMeetings?club=${CLUB_ID}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  return parseMatches(await r.text());
 }
 
 function parseMatches(html) {
   const matches = [];
+  const start = html.indexOf('Begegnungen im Zeitraum');
+  if (start === -1) return { matches: [], upcoming: [], played: [], fetchedAt: new Date().toISOString() };
 
-  const tableStart = html.indexOf('Begegnungen im Zeitraum');
-  if (tableStart === -1) return { matches: [], upcoming: [], played: [], fetchedAt: new Date().toISOString() };
-  const tableHtml = html.slice(tableStart);
-
+  const tableHtml = html.slice(start);
   const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
   let currentDate = '';
   let currentTime = '';
-  let match;
+  let m;
 
-  while ((match = rowRegex.exec(tableHtml)) !== null) {
-    const row = match[1];
+  while ((m = rowRegex.exec(tableHtml)) !== null) {
+    const row = m[1];
 
-    // Alle <td> roh extrahieren
-    const rawCells = [];
-    const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-    let cellMatch;
-    while ((cellMatch = cellRegex.exec(row)) !== null) {
-      rawCells.push(cellMatch[1]);
-    }
-    if (rawCells.length < 5) continue;
+    // Alle <td> als rohes HTML sammeln
+    const cells = [];
+    const cr = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+    let cm;
+    while ((cm = cr.exec(row)) !== null) cells.push(cm[1]);
+    if (cells.length < 5) continue;
 
-    // Datum & Uhrzeit aus Zelle 1
-    const dateTimeText = stripTags(rawCells[1] || '');
-    const dateMatch = dateTimeText.match(/(\d{2}\.\d{2}\.\d{4})/);
-    const timeMatch = dateTimeText.match(/(\d{2}:\d{2})/);
-    if (dateMatch) currentDate = dateMatch[1];
-    if (timeMatch) currentTime = timeMatch[1];
+    // Spalte 0: Wochentag (So., Mo., ...)  — nur wenn vorhanden neues Datum setzen
+    // Spalte 1: Datum + Uhrzeit
+    const dt = strip(cells[1]);
+    const dm = dt.match(/(\d{2}\.\d{2}\.\d{4})/);
+    const tm = dt.match(/(\d{2}:\d{2})/);
+    if (dm) currentDate = dm[1];
+    if (tm) currentTime = tm[1];
 
-    // Liga aus Zelle 2: erst Text-Inhalt, dann als Fallback den img alt-Text
-    // Die Liga steht direkt als Text in der Zelle, z.B. "M30BL" oder "W34BK"
-    const ligaRaw = rawCells[2] || '';
-    // Alle Tags entfernen und nur echten Text behalten
-    const liga = ligaRaw
-      .replace(/<img[^>]*>/gi, '')   // Bilder raus
-      .replace(/<[^>]+>/g, '')       // alle anderen Tags
-      .replace(/&nbsp;/g, '')
-      .replace(/\u00a0/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
+    // Spalte 2: leer / Heimspiel-Icon — überspringen
+    // Spalte 3: Liga — direkt als Text, KEIN Link, z.B. "W34BK"
+    const liga = strip(cells[3]);
 
-    // Teamnamen aus Links
-    const homeName = extractTeamName(rawCells[3] || '');
-    const awayName = extractTeamName(rawCells[4] || '');
+    // Spalte 4: Heimmannschaft (Link)
+    // Spalte 5: Gastmannschaft (Link)
+    const home = extractTeam(cells[4]);
+    const away = extractTeam(cells[5] || '');
 
-    if (!homeName || !awayName) continue;
-    if (homeName === 'Heimmannschaft') continue;
-    if (!homeName.includes('Nottuln') && !awayName.includes('Nottuln')) continue;
+    if (!home || !away) continue;
+    if (home === 'Heimmannschaft' || liga === 'Liga' || liga === '') continue;
+    if (!home.includes('Nottuln') && !away.includes('Nottuln')) continue;
 
-    // Ergebnis aus Zelle 5
-    const scoreText = stripTags(rawCells[5] || '');
-    const scoreMatch2 = scoreText.match(/(\d+):(\d+)/);
+    // Spalte 6: Matches-Ergebnis
+    const scoreM = strip(cells[6] || '').match(/(\d+):(\d+)/);
 
-    // Status
-    const statusText = stripTags(rawCells[rawCells.length - 1] || '').toLowerCase();
-    let status;
-    if (scoreMatch2) {
-      status = 'played';
-    } else if (statusText.includes('urspr')) {
-      status = 'rescheduled';
-    } else {
-      status = 'upcoming';
-    }
+    // Letzte Spalte: Spielbericht / Status
+    const statusText = strip(cells[cells.length - 1]).toLowerCase();
+    const status = scoreM ? 'played'
+      : statusText.includes('urspr') ? 'rescheduled'
+      : 'upcoming';
 
     matches.push({
       date: currentDate,
       time: currentTime,
       league: liga,
-      home: homeName,
-      away: awayName,
-      homeScore: scoreMatch2 ? scoreMatch2[1] : null,
-      awayScore: scoreMatch2 ? scoreMatch2[2] : null,
+      home,
+      away,
+      homeScore: scoreM ? scoreM[1] : null,
+      awayScore: scoreM ? scoreM[2] : null,
       status,
-      isHome: homeName.includes('Nottuln'),
+      isHome: home.includes('Nottuln'),
     });
   }
 
@@ -166,14 +130,14 @@ function parseMatches(html) {
   };
 }
 
-function extractTeamName(html) {
-  const linkMatch = html.match(/teamPortrait[^"]*"[^>]*>([^<]+)<\/a>/);
-  if (linkMatch) return linkMatch[1].trim();
-  const plain = stripTags(html).replace(/[\u00a0]+/g, '').trim();
+function extractTeam(html) {
+  const lm = html.match(/teamPortrait[^"]*"[^>]*>([^<]+)<\/a>/);
+  if (lm) return lm[1].trim();
+  const plain = strip(html);
   return plain || null;
 }
 
-function stripTags(html) {
+function strip(html) {
   return html
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
