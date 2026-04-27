@@ -1,4 +1,4 @@
-// api/nuliga.js — v2 fixed
+// api/nuliga.js — v3
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 
@@ -82,7 +82,6 @@ async function fetchMatches() {
 function parseMatches(html) {
   const matches = [];
 
-  // Nur den Bereich ab der Begegnungstabelle parsen
   const tableStart = html.indexOf('Begegnungen im Zeitraum');
   if (tableStart === -1) return { matches: [], upcoming: [], played: [], fetchedAt: new Date().toISOString() };
   const tableHtml = html.slice(tableStart);
@@ -95,7 +94,7 @@ function parseMatches(html) {
   while ((match = rowRegex.exec(tableHtml)) !== null) {
     const row = match[1];
 
-    // Alle <td>-Inhalte als rohes HTML
+    // Alle <td> roh extrahieren
     const rawCells = [];
     const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
     let cellMatch;
@@ -104,17 +103,26 @@ function parseMatches(html) {
     }
     if (rawCells.length < 5) continue;
 
-    // Datum & Uhrzeit
+    // Datum & Uhrzeit aus Zelle 1
     const dateTimeText = stripTags(rawCells[1] || '');
     const dateMatch = dateTimeText.match(/(\d{2}\.\d{2}\.\d{4})/);
     const timeMatch = dateTimeText.match(/(\d{2}:\d{2})/);
     if (dateMatch) currentDate = dateMatch[1];
     if (timeMatch) currentTime = timeMatch[1];
 
-    // Liga: &nbsp; und Leerzeichen entfernen
-    const liga = stripTags(rawCells[2] || '').replace(/[\u00a0\s]+/g, ' ').trim();
+    // Liga aus Zelle 2: erst Text-Inhalt, dann als Fallback den img alt-Text
+    // Die Liga steht direkt als Text in der Zelle, z.B. "M30BL" oder "W34BK"
+    const ligaRaw = rawCells[2] || '';
+    // Alle Tags entfernen und nur echten Text behalten
+    const liga = ligaRaw
+      .replace(/<img[^>]*>/gi, '')   // Bilder raus
+      .replace(/<[^>]+>/g, '')       // alle anderen Tags
+      .replace(/&nbsp;/g, '')
+      .replace(/\u00a0/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
 
-    // Teamnamen NUR aus <a>-Links (vermeidet Routenplan-Text)
+    // Teamnamen aus Links
     const homeName = extractTeamName(rawCells[3] || '');
     const awayName = extractTeamName(rawCells[4] || '');
 
@@ -122,11 +130,11 @@ function parseMatches(html) {
     if (homeName === 'Heimmannschaft') continue;
     if (!homeName.includes('Nottuln') && !awayName.includes('Nottuln')) continue;
 
-    // Ergebnis
+    // Ergebnis aus Zelle 5
     const scoreText = stripTags(rawCells[5] || '');
     const scoreMatch2 = scoreText.match(/(\d+):(\d+)/);
 
-    // Status: hat es ein Ergebnis? → played. Sonst upcoming/rescheduled
+    // Status
     const statusText = stripTags(rawCells[rawCells.length - 1] || '').toLowerCase();
     let status;
     if (scoreMatch2) {
