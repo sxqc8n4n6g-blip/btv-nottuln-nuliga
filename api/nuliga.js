@@ -30,6 +30,26 @@ module.exports = async function handler(req, res) {
       // championship kommt bereits URL-encoded von Framer an – direkt weitergeben
       const url = BASE + '/meetingReport?meeting=' + meeting + '&federation=WTV' + (championship ? '&championship=' + championship : '');
       const html = await get(url);
+      if (req.query.debug === '1') {
+        const si = html.indexOf('Einzelspiele');
+        const di = html.indexOf('Doppelspiele');
+        const rows = [];
+        if (si !== -1) {
+          const section = di !== -1 ? html.slice(si, di) : html.slice(si, si+3000);
+          const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+          let rm;
+          while ((rm = rowRe.exec(section)) !== null) {
+            const cells = [];
+            const cr = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+            let cm2;
+            while ((cm2 = cr.exec(rm[1])) !== null) {
+              cells.push(cm2[1].replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().slice(0,60));
+            }
+            if (cells.length) rows.push({ n: cells.length, c: cells });
+          }
+        }
+        return res.status(200).json({ singlesFound: si !== -1, doublesFound: di !== -1, rows });
+      }
       return res.status(200).json(parseMeetingReport(html));
     }
     if (type === 'teams') return res.status(200).json(await fetchTeams());
