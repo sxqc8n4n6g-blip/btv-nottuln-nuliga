@@ -27,7 +27,8 @@ module.exports = async function handler(req, res) {
       const meeting = req.query.meeting;
       const championship = req.query.championship || '';
       if (!meeting) return res.status(400).json({ error: 'meeting parameter required' });
-      const url = BASE + '/meetingReport?meeting=' + meeting + '&federation=WTV' + (championship ? '&championship=' + encodeURIComponent(championship) : '');
+      // championship kommt bereits URL-encoded von Framer an – direkt weitergeben
+      const url = BASE + '/meetingReport?meeting=' + meeting + '&federation=WTV' + (championship ? '&championship=' + championship : '');
       const html = await get(url);
       return res.status(200).json(parseMeetingReport(html));
     }
