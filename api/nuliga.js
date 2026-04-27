@@ -1,4 +1,4 @@
-// api/nuliga.js — v12
+// api/nuliga.js — v13
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
@@ -70,24 +70,21 @@ async function fetchTeams() {
 async function fetchMatches() {
   const teamMap = await buildTeamMap();
 
-  // Alle relevanten URLs laden:
-  // 1. Sommer 2026 (aktuelle Saison, enthält upcoming + played)
-  // 2. Winter 25/26 komplett (alle Ergebnisse)
-  // 3. Vereinspokal 2026
-  const [summerHtml, winterHtml, pokalHtml] = await Promise.all([
+  // Sommer 2026: Standard-URL (nächste Monate)
+  // Winter 25/26: expliziter Datumsbereich Oktober 2025 - April 2026
+  // Sommer 2026 komplett: auch vergangene Spiele (ab März 2026)
+  const [upcomingHtml, winterHtml, recentHtml] = await Promise.all([
     get(BASE + '/clubMeetings?club=' + CLUB_ID),
-    get(BASE + '/clubMeetings?club=' + CLUB_ID + '&timeRange=season&championship=MS+Winter+25%2F26'),
-    get(BASE + '/clubMeetings?club=' + CLUB_ID + '&timeRange=season&championship=WTV+VP+2026'),
+    get(BASE + '/clubMeetings?club=' + CLUB_ID + '&searchTimeRangeType=period&startDate=01.10.2025&endDate=30.04.2026'),
+    get(BASE + '/clubMeetings?club=' + CLUB_ID + '&searchTimeRangeType=period&startDate=01.03.2026&endDate=31.12.2026'),
   ]);
 
-  const summer = parseMatches(summerHtml, teamMap, 'Sommer 2026');
-  const winter = parseMatches(winterHtml, teamMap, 'Winter 2025/26');
-  const pokal  = parseMatches(pokalHtml,  teamMap, 'Vereinspokal 2026');
+  const upcoming = parseMatches(upcomingHtml, teamMap, 'Sommer 2026');
+  const winter   = parseMatches(winterHtml,   teamMap, 'Winter 2025/26');
+  const recent   = parseMatches(recentHtml,   teamMap, 'Sommer 2026');
 
-  // Zusammenführen
-  const combined = winter.concat(summer).concat(pokal);
-
-  // Deduplizieren: gleicher Key = selbes Spiel
+  // Zusammenführen und deduplizieren
+  const combined = winter.concat(upcoming).concat(recent);
   const seen = {};
   const all = [];
   for (let i = 0; i < combined.length; i++) {
@@ -99,7 +96,6 @@ async function fetchMatches() {
     }
   }
 
-  // Nach Datum sortieren
   all.sort(function(a, b) {
     function ms(s) {
       const p = s.split('.');
@@ -111,7 +107,7 @@ async function fetchMatches() {
   return {
     matches: all,
     upcoming: all.filter(function(m) { return m.status !== 'played'; }),
-    played: all.filter(function(m) { return m.status === 'played'; }),
+    played:   all.filter(function(m) { return m.status === 'played'; }),
     fetchedAt: new Date().toISOString(),
   };
 }
