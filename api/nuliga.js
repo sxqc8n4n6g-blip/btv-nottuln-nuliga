@@ -76,7 +76,7 @@ function parseMeetingReport(html) {
   const doublesStart = html.indexOf('Doppelspiele');
 
   // Einzel: 10 Zellen pro Zeile
-  // 0=Nr, 1=Spieler1, 2=Nr, 3=Spieler2, 4=Satz1, 5=Satz2, 6=Satz3, 7=Matches, 8=Sätze, 9=Games
+  // 0=Nr, 1=Spieler1, 2=Nr, 3=Spieler2, 4=Satz1, 5=Satz2, 6=Satz3, 7=Sätze, 8=Matches, 9=Games
   if (singlesStart !== -1 && doublesStart !== -1) {
     const singlesHtml = html.slice(singlesStart, doublesStart);
     const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -93,7 +93,8 @@ function parseMeetingReport(html) {
       const s1 = strip(cells[4]);
       const s2 = strip(cells[5]);
       const s3 = strip(cells[6]);
-      const result = strip(cells[7]);
+      // Zelle 8 = Matches-Ergebnis (z.B. "2:1"), Zelle 7 = Sätze, Zelle 9 = Games
+      const result = strip(cells[8]);
       if (!result.match(/\d:\d/)) continue;
       singles.push({ player1: p1.name, player1lk: p1.lk, player2: p2.name, player2lk: p2.lk, set1: s1, set2: s2, set3: s3, result: result });
     }
