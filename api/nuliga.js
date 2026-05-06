@@ -1,13 +1,37 @@
-// api/nuliga.js — v17
+// api/nuliga.js — v18
 const CLUB_ID = '26684';
 const BASE = 'https://wtv.liga.nu/cgi-bin/WebObjects/nuLigaTENDE.woa/wa';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
-const WINTER_TEAMS = [
-  { id: '3491050', name: 'Herren 4er 1',    championship: 'MS+Winter+25%2F26' },
-  { id: '3469632', name: 'Herren 30 4er 1', championship: 'MS+Winter+25%2F26' },
-  { id: '3491051', name: 'Herren 30 4er 2', championship: 'MS+Winter+25%2F26' },
-  { id: '3491052', name: 'Herren 40 4er 1', championship: 'MS+Winter+25%2F26' },
+// Alle Mannschaften mit teamPortrait-ID – Sommer, Winter, Vereinspokal
+const ALL_TEAMS = [
+  // Sommer 2026 – Damen
+  { id: '3531446', name: 'Damen 30 4er 1',                     championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3654270', name: 'Damen 30 4er 2',                     championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3529551', name: 'Damen 50 Doppel 1',                  championship: 'MS+2026',           season: 'Sommer 2026' },
+  // Sommer 2026 – Herren
+  { id: '3670513', name: 'Herren 6er 1',                       championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3531896', name: 'Herren 4er 2',                       championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3670517', name: 'Herren 30 4er 1',                    championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3530933', name: 'Herren 30 4er 2',                    championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3534887', name: 'Herren 40 4er 1',                    championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3530112', name: 'Herren 50 4er 1',                    championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3654372', name: 'Herren 55 4er 1',                    championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3533302', name: 'Herren 60 Doppel 1',                 championship: 'MS+2026',           season: 'Sommer 2026' },
+  // Sommer 2026 – Jugend
+  { id: '3528879', name: 'Junioren U15 2er 1',                 championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3666813', name: 'Junioren U12 2er Gruener Ball 1',    championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3532988', name: 'Juniorinnen U18 2er 1',              championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3666814', name: 'Gemischt U10 Midcourt 2er 1',        championship: 'MS+2026',           season: 'Sommer 2026' },
+  { id: '3659367', name: 'Gemischt U8 Kleinfeld 2er 1',        championship: 'MS+2026',           season: 'Sommer 2026' },
+  // Vereinspokal 2026
+  { id: '3535767', name: 'Herren Offen Generali LK 13-25,0 1', championship: 'WTV+VP+2026',      season: 'Vereinspokal 2026' },
+  { id: '3659835', name: 'Damen Ue40 Generali LK 15,0-25,0 1', championship: 'WTV+VP+2026',      season: 'Vereinspokal 2026' },
+  // Winter 2025/26 – Herren
+  { id: '3491050', name: 'Herren 4er 1',                       championship: 'MS+Winter+25%2F26', season: 'Winter 2025/26' },
+  { id: '3469632', name: 'Herren 30 4er 1',                    championship: 'MS+Winter+25%2F26', season: 'Winter 2025/26' },
+  { id: '3491051', name: 'Herren 30 4er 2',                    championship: 'MS+Winter+25%2F26', season: 'Winter 2025/26' },
+  { id: '3491052', name: 'Herren 40 4er 1',                    championship: 'MS+Winter+25%2F26', season: 'Winter 2025/26' },
 ];
 
 const CORS = {
@@ -212,27 +236,26 @@ async function fetchTeams() {
 
 async function fetchMatches() {
   const teamMap = await buildTeamMap();
-  const summerHtml = await get(BASE + '/clubMeetings?club=' + CLUB_ID);
-  const summerMatches = parseClubMeetings(summerHtml, teamMap, 'Sommer 2026');
 
-  const winterHtmls = await Promise.all(
-    WINTER_TEAMS.map(function(t) {
+  // Alle Mannschaften über teamPortrait laden (enthält Ergebnisse + anstehende Spiele)
+  const teamHtmls = await Promise.all(
+    ALL_TEAMS.map(function(t) {
       return get(BASE + '/teamPortrait?team=' + t.id + '&championship=' + t.championship);
     })
   );
 
-  const winterMatches = [];
-  for (var i = 0; i < WINTER_TEAMS.length; i++) {
-    var matches = parseTeamPortrait(winterHtmls[i], WINTER_TEAMS[i].name, 'Winter 2025/26');
-    for (var j = 0; j < matches.length; j++) winterMatches.push(matches[j]);
+  const allTeamMatches = [];
+  for (var i = 0; i < ALL_TEAMS.length; i++) {
+    var matches = parseTeamPortrait(teamHtmls[i], ALL_TEAMS[i].name, ALL_TEAMS[i].season);
+    for (var j = 0; j < matches.length; j++) allTeamMatches.push(matches[j]);
   }
 
-  const combined = winterMatches.concat(summerMatches);
+  // Deduplizieren: gleiche Partie kann in Heim- und Gastteam-Seite auftauchen
   const seen = {};
   const all = [];
-  for (var i = 0; i < combined.length; i++) {
-    const match = combined[i];
-    const key = match.date + '|' + match.home + '|' + match.away;
+  for (var i = 0; i < allTeamMatches.length; i++) {
+    const match = allTeamMatches[i];
+    const key = match.date + '|' + match.home + '|' + match.away + '|' + match.season;
     if (!seen[key]) { seen[key] = true; all.push(match); }
   }
 
