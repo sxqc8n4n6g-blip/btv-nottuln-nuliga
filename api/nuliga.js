@@ -337,12 +337,13 @@ function parseClubMeetings(html, teamMap, season) {
 function parseTeamPortrait(html, btvTeamName, season) {
   const matches = [];
 
-  // Bereich "Spieltermine" bis "Spieler -" isolieren
-  const startIdx = html.indexOf('Spieltermine');
+  // Bereich "Spieltermine" finden – auch "Begegnungen" als Fallback
+  let startIdx = html.indexOf('Spieltermine');
+  if (startIdx === -1) startIdx = html.indexOf('Begegnungen');
   if (startIdx === -1) return matches;
 
-  // Suche nach dem zweiten h2 (Spieler-Abschnitt) NACH startIdx
-  const secondH2 = html.indexOf('<h2', startIdx + 50);
+  // Suche nach dem nächsten Abschnitt NACH dem Spieltermine-Block
+  const secondH2 = html.indexOf('<h2', startIdx + 100);
   const spielerIdx = html.indexOf('Spieler -', startIdx);
   let endIdx = html.length;
   if (secondH2 !== -1) endIdx = Math.min(endIdx, secondH2);
@@ -377,13 +378,19 @@ function parseTeamPortrait(html, btvTeamName, season) {
     const awayRaw = strip(cells[4]);
     if (!homeRaw || !awayRaw) continue;
     if (homeRaw.match(/^\d{7,}$/) || awayRaw.match(/^\d{7,}$/)) continue;
-    if (homeRaw === 'Heimmannschaft' || homeRaw === 'Datum' || homeRaw === 'Dorstener TC 1' && awayRaw === 'BTV Nottuln') continue;
+    if (homeRaw === 'Heimmannschaft' || homeRaw === 'Datum') continue;
+    // Spielfreie Spieltage überspringen
+    if (awayRaw.toLowerCase() === 'spielfrei' || homeRaw.toLowerCase() === 'spielfrei') continue;
+    // Sieger aus Begegnung (noch nicht ausgelost) überspringen
+    if (homeRaw.includes('Sieger aus') || awayRaw.includes('Sieger aus')) continue;
 
     const isHome = homeRaw.includes('Nottuln') || homeRaw.includes('BTV');
+    const isBTVAway = awayRaw.includes('Nottuln') || awayRaw.includes('BTV');
+    // Wenn keines der Teams BTV ist, überspringen
+    if (!isHome && !isBTVAway) continue;
+
     const home = isHome ? btvTeamName : homeRaw;
-    const away = isHome
-      ? awayRaw
-      : (awayRaw.includes('Nottuln') ? btvTeamName : awayRaw);
+    const away = isBTVAway ? btvTeamName : awayRaw;
 
     // Gegner-URL
     const opponentCell = isHome ? cells[4] : cells[3];
