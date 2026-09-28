@@ -8,6 +8,16 @@ const EXCLUDED_TEAM_IDS = new Set([
   '3654372', // Herren 55 4er 1 – Sommer 2026 (Mannschaft zurückgezogen)
 ]);
 
+// Vergangene Saisons, die nuLiga nicht mehr auf der clubTeams-Seite zeigt
+// → werden immer mit geladen (als fester Fallback)
+const PAST_TEAMS = [
+  // Winter 2025/26 – Herren
+  { id: '3491050', name: 'Herren 4er 1',       championship: 'MS+Winter+25%2F26', season: 'Winter 2025/26' },
+  { id: '3469632', name: 'Herren 30 4er 1',    championship: 'MS+Winter+25%2F26', season: 'Winter 2025/26' },
+  { id: '3491051', name: 'Herren 30 4er 2',    championship: 'MS+Winter+25%2F26', season: 'Winter 2025/26' },
+  { id: '3491052', name: 'Herren 40 4er 1',    championship: 'MS+Winter+25%2F26', season: 'Winter 2025/26' },
+];
+
 // Championship-Parameter aus Saison-String ableiten
 // "Sommer 2026"      → "MS+2026"
 // "Winter 2025/26"   → "MS+Winter+25%2F26"
@@ -20,8 +30,14 @@ function seasonToChampionship(season) {
   const vereinspokal = s.match(/Vereinspokal\s+(\d{4})/i);
   if (vereinspokal) return 'WTV+VP+' + vereinspokal[1];
 
-  const winter = s.match(/Winter\s+(\d{2})\/(\d{2})/i);
-  if (winter) return 'MS+Winter+' + winter[1] + '%2F' + winter[2];
+  // "Winter 2026/27" (4+2) oder "Winter 2025/26" (2+2 – älteres Format)
+  const winter4 = s.match(/Winter\s+(\d{4})\/(\d{2})/i);
+  if (winter4) {
+    const short = winter4[1].slice(2); // "2026" → "26"
+    return 'MS+Winter+' + short + '%2F' + winter4[2];
+  }
+  const winter2 = s.match(/Winter\s+(\d{2})\/(\d{2})/i);
+  if (winter2) return 'MS+Winter+' + winter2[1] + '%2F' + winter2[2];
 
   const sommer = s.match(/Sommer\s+(\d{4})/i);
   if (sommer) return 'MS+' + sommer[1];
@@ -259,20 +275,29 @@ async function fetchTeams() {
 // ─── MATCHES ─────────────────────────────────────────────────────────────────
 
 async function fetchMatches() {
-  // Teams dynamisch von clubTeams-Seite holen
+  // Teams dynamisch von clubTeams-Seite holen (aktuelle Saison/en)
   const discoveryResult = await discoverTeams();
   const dynamicTeams = discoveryResult.teams;
 
+  // Vergangene Teams ergänzen, sofern nicht bereits enthalten
+  const dynamicIds = new Set(dynamicTeams.map(function(t) { return t.id; }));
+  const allTeams = dynamicTeams.slice();
+  for (var pi = 0; pi < PAST_TEAMS.length; pi++) {
+    if (!dynamicIds.has(PAST_TEAMS[pi].id) && !EXCLUDED_TEAM_IDS.has(PAST_TEAMS[pi].id)) {
+      allTeams.push(PAST_TEAMS[pi]);
+    }
+  }
+
   // Alle teamPortrait-Seiten parallel laden
   const teamHtmls = await Promise.all(
-    dynamicTeams.map(function(t) {
+    allTeams.map(function(t) {
       return get(BASE + '/teamPortrait?team=' + t.id + '&championship=' + t.championship);
     })
   );
 
   const allTeamMatches = [];
-  for (var i = 0; i < dynamicTeams.length; i++) {
-    var matches = parseTeamPortrait(teamHtmls[i], dynamicTeams[i].name, dynamicTeams[i].season);
+  for (var i = 0; i < allTeams.length; i++) {
+    var matches = parseTeamPortrait(teamHtmls[i], allTeams[i].name, allTeams[i].season);
     for (var j = 0; j < matches.length; j++) allTeamMatches.push(matches[j]);
   }
 
@@ -295,7 +320,7 @@ async function fetchMatches() {
     upcoming: all.filter(function(m) { return m.status !== 'played'; }),
     played:   all.filter(function(m) { return m.status === 'played'; }),
     fetchedAt: new Date().toISOString(),
-    teamsLoaded: dynamicTeams.length,
+    teamsLoaded: allTeams.length,
   };
 }
 
