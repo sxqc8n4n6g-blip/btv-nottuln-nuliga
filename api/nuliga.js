@@ -30,14 +30,17 @@ function seasonToChampionship(season) {
   const vereinspokal = s.match(/Vereinspokal\s+(\d{4})/i);
   if (vereinspokal) return 'WTV+VP+' + vereinspokal[1];
 
-  // "Winter 2026/27" (4+2) oder "Winter 2025/26" (2+2 – älteres Format)
-  const winter4 = s.match(/Winter\s+(\d{4})\/(\d{2})/i);
-  if (winter4) {
-    const short = winter4[1].slice(2); // "2026" → "26"
-    return 'MS+Winter+' + short + '%2F' + winter4[2];
+  // "Winter 2026/2027" (4+4), "Winter 2026/27" (4+2), "Winter 25/26" (2+2)
+  const winter44 = s.match(/Winter\s+(\d{4})\/(\d{4})/i);
+  if (winter44) {
+    return 'MS+Winter+' + winter44[1].slice(2) + '%2F' + winter44[2].slice(2);
   }
-  const winter2 = s.match(/Winter\s+(\d{2})\/(\d{2})/i);
-  if (winter2) return 'MS+Winter+' + winter2[1] + '%2F' + winter2[2];
+  const winter42 = s.match(/Winter\s+(\d{4})\/(\d{2})/i);
+  if (winter42) {
+    return 'MS+Winter+' + winter42[1].slice(2) + '%2F' + winter42[2];
+  }
+  const winter22 = s.match(/Winter\s+(\d{2})\/(\d{2})/i);
+  if (winter22) return 'MS+Winter+' + winter22[1] + '%2F' + winter22[2];
 
   const sommer = s.match(/Sommer\s+(\d{4})/i);
   if (sommer) return 'MS+' + sommer[1];
